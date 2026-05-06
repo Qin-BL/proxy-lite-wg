@@ -679,6 +679,8 @@ const managePageHTML = `<!doctype html>
         return;
       }
       setStatus('Loading users and clients...');
+      const nextUsers = state.users.slice();
+      const nextClients = state.clients.slice();
       const [usersResult, clientsResult] = await Promise.allSettled([
         api('/api/v1/users'),
         api('/api/v1/clients'),
@@ -689,15 +691,15 @@ const managePageHTML = `<!doctype html>
       if (usersResult.status === 'fulfilled') {
         state.users = (await usersResult.value.json()).items || [];
       } else {
-        state.users = [];
         loadError = usersResult.reason;
+        state.users = nextUsers;
       }
 
       if (clientsResult.status === 'fulfilled') {
         state.clients = (await clientsResult.value.json()).items || [];
       } else {
-        state.clients = [];
         loadError = clientsResult.reason;
+        state.clients = nextClients;
       }
 
       renderUsers();
@@ -708,6 +710,23 @@ const managePageHTML = `<!doctype html>
         throw loadError;
       }
       setStatus('Ready');
+    }
+
+    async function refreshAfterRuntimeChange(successMessage) {
+      setStatus(successMessage + ' Refreshing runtime...');
+      for (const waitMs of [3000, 4500, 6500, 8500]) {
+        await delay(waitMs);
+        try {
+          await loadSession();
+          if (!state.session) {
+            throw new Error('Please log in again');
+          }
+          await loadData();
+          setStatus(successMessage);
+          return;
+        } catch (_) {}
+      }
+      setStatus(successMessage + ' Runtime is reloading. Use Reload List if the list looks stale.');
     }
 
     async function handleClientAction(item, action) {
@@ -754,15 +773,19 @@ const managePageHTML = `<!doctype html>
             return;
           }
           await api('/api/v1/clients/' + item.id + '/disable', { method: 'POST' });
-          await loadData();
-          setStatus('Disabled ' + item.label);
+          item.state = 'disabled';
+          renderStats();
+          renderClients();
+          await refreshAfterRuntimeChange('Disabled ' + item.label);
           return;
         }
 
         if (action === 'enable') {
           await api('/api/v1/clients/' + item.id + '/enable', { method: 'POST' });
-          await loadData();
-          setStatus('Enabled ' + item.label);
+          item.state = 'active';
+          renderStats();
+          renderClients();
+          await refreshAfterRuntimeChange('Enabled ' + item.label);
           return;
         }
 
@@ -771,8 +794,12 @@ const managePageHTML = `<!doctype html>
             return;
           }
           await api('/api/v1/clients/' + item.id, { method: 'DELETE' });
-          await loadData();
-          setStatus('Deleted ' + item.label);
+          state.clients = state.clients.filter((client) => client.id !== item.id);
+          renderUsers();
+          renderUserDirectory();
+          renderStats();
+          renderClients();
+          await refreshAfterRuntimeChange('Deleted ' + item.label);
         }
       } catch (error) {
         setStatus(error.message, true);
@@ -886,14 +913,18 @@ const managePageHTML = `<!doctype html>
           user_id: document.getElementById('userSelect').value,
           label: document.getElementById('clientLabel').value.trim(),
         };
-        await api('/api/v1/clients', {
+        const response = await api('/api/v1/clients', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
+        const client = await response.json();
         event.target.reset();
-        await loadData();
-        setStatus('Client issued');
+        state.clients = [client, ...state.clients.filter((item) => item.id !== client.id)];
+        renderUserDirectory();
+        renderStats();
+        renderClients();
+        await refreshAfterRuntimeChange('Client issued');
       } catch (error) {
         setStatus(error.message, true);
       }

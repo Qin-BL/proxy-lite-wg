@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -34,10 +36,13 @@ type Repository interface {
 }
 
 type XrayService struct {
-	cfg        config.Config
-	repo       Repository
-	docker     *client.Client
-	restartXray bool
+	cfg           config.Config
+	repo          Repository
+	docker        *client.Client
+	restartXray   bool
+	restartMu     sync.Mutex
+	restartBusy   bool
+	restartQueued bool
 }
 
 func NewXrayService(cfg config.Config, repo Repository) (*XrayService, error) {
@@ -326,13 +331,49 @@ func (s *XrayService) syncRuntime(ctx context.Context) error {
 	}
 
 	if s.restartXray {
-		timeout := 10
-		if err := s.docker.ContainerRestart(ctx, s.cfg.XrayContainerName, container.StopOptions{Timeout: &timeout}); err != nil {
-			return fmt.Errorf("restart xray container: %w", err)
-		}
+		s.requestXrayRestart()
 	}
 
 	return nil
+}
+
+func (s *XrayService) requestXrayRestart() {
+	s.restartMu.Lock()
+	if s.restartBusy {
+		s.restartQueued = true
+		s.restartMu.Unlock()
+		return
+	}
+	s.restartBusy = true
+	s.restartMu.Unlock()
+
+	go s.restartXrayLoop()
+}
+
+func (s *XrayService) restartXrayLoop() {
+	for {
+		// Give the admin UI or CLI enough time to receive the mutation response
+		// before the active tunnel is interrupted by an Xray restart.
+		time.Sleep(2 * time.Second)
+
+		timeout := 10
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := s.docker.ContainerRestart(ctx, s.cfg.XrayContainerName, container.StopOptions{Timeout: &timeout})
+		cancel()
+		if err != nil {
+			log.Printf("restart xray container: %v", err)
+		}
+
+		s.restartMu.Lock()
+		if s.restartQueued {
+			s.restartQueued = false
+			s.restartMu.Unlock()
+			continue
+		}
+		s.restartBusy = false
+		s.restartMu.Unlock()
+		return
+	}
 }
 
 func (s *XrayService) buildXrayConfig(clients []domain.Client) map[string]any {
