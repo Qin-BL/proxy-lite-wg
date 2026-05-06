@@ -1,0 +1,32 @@
+services:
+  control-plane:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: proxy-lite-wg-control-plane:latest
+    container_name: proxy-lite-wg-control-plane
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18080:8080"
+    env_file:
+      - ./.env
+    volumes:
+      - proxy-lite-wg-data:/app/data
+      - proxy-lite-wg-runtime:/app/runtime
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  xray:
+    image: ghcr.io/xtls/xray-core:latest
+    container_name: proxy-lite-wg-xray
+    restart: unless-stopped
+    depends_on:
+      - control-plane
+    command: ["run", "-config", "/etc/xray/config.json"]
+    ports:
+      - "127.0.0.1:10000:10000"
+    volumes:
+      - proxy-lite-wg-runtime:/etc/xray
+
+volumes:
+  proxy-lite-wg-data:
+  proxy-lite-wg-runtime:

@@ -1,0 +1,7 @@
+.env
+/data/
+/tmp/
+/proxy-lite-wg
+/proxy-lite-wg.exe
+/proxy-lite-wg.exe~
+/proxy-lite-wg-*.exe
